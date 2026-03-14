@@ -83,7 +83,6 @@ void OS::MOS(int a) {
     cpu.SI = 0; 
 }
 
-
 void OS::execute() {
     while (true) {
         if (cpu.IC >= 100) break;
@@ -133,10 +132,9 @@ void OS::execute() {
     }
 }
 
-
 void OS::load() {
     string line;
-    int mem = 0; // Move this OUTSIDE the while loop
+    int mem = 0;
     while (getline(input, line)) {
         if (line.empty()) continue;
 
