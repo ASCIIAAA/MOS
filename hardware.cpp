@@ -1,16 +1,10 @@
+#include "hardware.hpp"
 #include<iostream>
 using namespace std;
 
-//simulating os VM here
 char memory[100][4];
-class CPU{
-public:
-    char R[4];   //gpr
-    char IR[4]; //instruction register
-    int IC;     //instruction counter
-    bool C;     //condition code
-    int SI;      //interrupt
-    void reset(){
+CPU cpu;
+void CPU :: reset(){
         for(int i=0;i<4;i++){
             R[i]=' ';
             IR[i]= ' ';
@@ -19,9 +13,7 @@ public:
         C= false;
         SI= 0;
     }
-};
 
-CPU cpu;
 void initMemory(){
     for(int i=0;i<100;i++){
         for(int j=0;j<4; j++){
