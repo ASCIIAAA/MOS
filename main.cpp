@@ -1,191 +1,190 @@
 #include <iostream>
 #include <fstream>
 #include <string>
+#include <cstdlib>
+#include <ctime>
 
 using namespace std;
 
-// =============================================================================
-// GLOBAL HARDWARE DECLARATIONS
-// =============================================================================
+char memory[300][4];
+bool frameUsed[30];
+int PTR;
+ifstream input;
+ofstream output;
+bool jobTerminate = false;
 
-char memory[100][4];
-char buffer[40];
-
-class CPU {
-public:
-    char R[4];   // General Purpose Register
-    char IR[4];  // Instruction Register
-    int IC;      // Instruction Counter
-    bool C;      // Toggle Trigger (Compare result)
-    int SI;      // Service Interrupt
-
+struct CPU {
+    char R[4], IR[4];
+    int IC;
+    bool C;
+    int SI, PI, TI;
     void reset() {
-        for (int i = 0; i < 4; i++) {
-            R[i] = ' ';
-            IR[i] = ' ';
-        }
-        IC = 0;
-        C = false;
-        SI = 0;
+        IC = 0; C = false;
+        SI = PI = TI = 0;
+        for(int i=0; i<4; i++) R[i] = IR[i] = ' ';
     }
-};
+} cpu;
 
-CPU cpu;
+struct PCB {
+    int TTL, TLL, TTC, LLC;
+} pcb;
 
-void initMemory() {
-    for (int i = 0; i < 100; i++) {
-        for (int j = 0; j < 4; j++) {
-            memory[i][j] = '-';
-        }
-    }
+void init() {
+    for(int i=0; i<300; i++)
+        for(int j=0; j<4; j++) memory[i][j] = '-';
+    for(int i=0; i<30; i++) frameUsed[i] = false;
 }
 
-class OS {
-public:
-    ifstream input;
-    ofstream output;
+int allocateFrame() {
+    int f = rand() % 30;
+    while(frameUsed[f]) f = rand() % 30;
+    frameUsed[f] = true;
+    return f;
+}
 
-    void load();      
-    void execute();   
-    void MOS(int a);       
-};
+int addressMap(int VA) {
+    if(VA < 0 || VA >= 100) return -1;
+    int page = VA / 10;
+    int offset = VA % 10;
+    int pte = PTR + page;
+    if(memory[pte][0] == '*') return -1;
+    int frame = (memory[pte][2]-'0')*10 + (memory[pte][3]-'0');
+    return frame * 10 + offset;
+}
 
-void OS::MOS(int a) {
-    if (cpu.SI == 1) {        // GD
-        string data;
-        if (getline(input, data)) {
-            if (data.substr(0, 4) == "$END") return;
-            int charIdx = 0;
-            for (int i = 0; i < 10; i++) {
-                for (int j = 0; j < 4; j++) {
-                    if (charIdx < data.length())
-                        memory[a + i][j] = data[charIdx++];
-                    else
-                        memory[a + i][j] = ' ';
-                }
-            }
+void MOS(int RA = -1) {
+    if(cpu.TI == 2) {
+        output << "Time Limit Exceeded\n\n";
+        jobTerminate = true; return;
+    }
+    if(cpu.PI == 1) {
+        output << "Opcode Error\n\n";
+        jobTerminate = true; return;
+    }
+    if(cpu.PI == 2) {
+        output << "Operand Error\n\n";
+        jobTerminate = true; return;
+    }
+    if(cpu.PI == 3) {
+        string op = ""; op += cpu.IR[0]; op += cpu.IR[1];
+        if(op == "GD" || op == "SR") {
+            int frame = allocateFrame();
+            int VA = (cpu.IR[2]-'0')*10 + (cpu.IR[3]-'0');
+            int pte = PTR + (VA/10);
+            memory[pte][0]='0'; memory[pte][1]='0';
+            memory[pte][2]=(frame/10)+'0'; memory[pte][3]=(frame%10)+'0';
+            cpu.PI = 0; cpu.IC--; 
+            return;
+        } else {
+            output << "Invalid Page Fault\n\n";
+            jobTerminate = true; return;
         }
     }
-    else if (cpu.SI == 2) {     // PD
-        for (int i = 0; i < 10; i++) {
-            for (int j = 0; j < 4; j++) {
-                if (memory[a + i][j] == '-') 
-                    output << ' ';
-                else 
-                    output << memory[a + i][j];
-            }
+    if(cpu.SI == 1) {
+        string data;
+        if(!getline(input, data) || data.substr(0,4) == "$END") {
+            output << "Out of Data\n\n";
+            jobTerminate = true; return;
+        }
+        for(int i=0; i<data.length() && i<40; i++) {
+            memory[RA + (i/4)][i%4] = data[i];
+        }
+    } else if(cpu.SI == 2) {
+        pcb.LLC++;
+        if(pcb.LLC > pcb.TLL) {
+            output << "Line Limit Exceeded\n\n";
+            jobTerminate = true; return;
+        }
+        for(int i=0; i<10; i++) {
+            for(int j=0; j<4; j++) if(memory[RA+i][j] != '-') output << memory[RA+i][j];
         }
         output << endl;
+    } else if(cpu.SI == 3) {
+        output << "Normal Termination\n\n";
+        jobTerminate = true;
     }
-    else if (cpu.SI == 3) {     
-        output << "\n-----------------------------------\n" << endl;
-    }
-    cpu.SI = 0; 
+    cpu.SI = 0;
 }
 
-void OS::execute() {
-    while (true) {
-        if (cpu.IC >= 100) break;
+void execute() {
+    jobTerminate = false;
+    while(!jobTerminate) {
+        int RA_inst = addressMap(cpu.IC);
+        if(RA_inst == -1) { cpu.PI = 3; MOS(); continue; }
 
-        //fetch Instruction
-        for (int i = 0; i < 4; i++) {
-            cpu.IR[i] = memory[cpu.IC][i];
-        }
-
-        if (cpu.IR[0] == 'H') {
-            cpu.SI = 3;
-            MOS(0);
-            return; 
-        }
-
-        //address
-        int address = (cpu.IR[2] - '0') * 10 + (cpu.IR[3] - '0');
+        for(int i=0; i<4; i++) cpu.IR[i] = memory[RA_inst][i];
         cpu.IC++;
 
-        // Execute 
-        if (cpu.IR[0] == 'G' && cpu.IR[1] == 'D') {
-            cpu.SI = 1;
-            MOS(address);
+        pcb.TTC++;
+        if(pcb.TTC > pcb.TTL) cpu.TI = 2;
+
+        if(cpu.IR[0] == 'H') { cpu.SI = 3; MOS(); continue; }
+        if(cpu.TI == 2) { MOS(); continue; }
+
+        string op = ""; op += cpu.IR[0]; op += cpu.IR[1];
+        if(op != "GD" && op != "PD" && op != "LR" && op != "SR" && op != "CR" && op != "BT") {
+            cpu.PI = 1; MOS(); continue;
         }
-        else if (cpu.IR[0] == 'P' && cpu.IR[1] == 'D') {
-            cpu.SI = 2;
-            MOS(address);
+        if(!isdigit(cpu.IR[2]) || !isdigit(cpu.IR[3])) {
+            cpu.PI = 2; MOS(); continue;
         }
-        else if (cpu.IR[0] == 'L' && cpu.IR[1] == 'R') {
-            for (int i = 0; i < 4; i++) cpu.R[i] = memory[address][i];
-        }
-        else if (cpu.IR[0] == 'S' && cpu.IR[1] == 'R') {
-            for (int i = 0; i < 4; i++) memory[address][i] = cpu.R[i];
-        }
-        else if (cpu.IR[0] == 'C' && cpu.IR[1] == 'R') {
-            cpu.C = true;
-            for (int i = 0; i < 4; i++) {
-                if (cpu.R[i] != memory[address][i]) {
-                    cpu.C = false;
-                    break;
-                }
-            }
-        }
-        else if (cpu.IR[0] == 'B' && cpu.IR[1] == 'T') {
-            if (cpu.C) cpu.IC = address;
+
+        int VA = (cpu.IR[2]-'0')*10 + (cpu.IR[3]-'0');
+        int RA_op = addressMap(VA);
+
+        if(op == "GD") {
+            if(RA_op == -1) { cpu.PI = 3; MOS(); } else { cpu.SI = 1; MOS(RA_op); }
+        } else if(op == "PD") {
+            if(RA_op == -1) { cpu.PI = 3; MOS(); } else { cpu.SI = 2; MOS(RA_op); }
+        } else if(op == "LR") {
+            if(RA_op == -1) { cpu.PI = 3; MOS(); } else { for(int i=0; i<4; i++) cpu.R[i]=memory[RA_op][i]; }
+        } else if(op == "SR") {
+            if(RA_op == -1) { cpu.PI = 3; MOS(); } else { for(int i=0; i<4; i++) memory[RA_op][i]=cpu.R[i]; }
+        } else if(op == "CR") {
+            if(RA_op == -1) { cpu.PI = 3; MOS(); } else { cpu.C=true; for(int i=0; i<4; i++) if(cpu.R[i]!=memory[RA_op][i]) cpu.C=false; }
+        } else if(op == "BT") {
+            if(cpu.C) cpu.IC = VA;
         }
     }
 }
 
-void OS::load() {
+void load() {
     string line;
-    int mem = 0;
-    while (getline(input, line)) {
-        if (line.empty()) continue;
-
-        if (line.substr(0, 4) == "$AMJ") {
-            initMemory();
-            cpu.reset();
-            mem = 0; 
-            if(line.length() >= 8) {
-            string jobId = line.substr(4, 4);
-            // output << "JOB ID           : " << jobId << endl;
-    }
-        }
-        else if (line.substr(0, 4) == "$DTA") {
+    int loadVA = 0;
+    while(getline(input, line)) {
+        if(line.empty()) continue;
+        if(line.substr(0,4) == "$AMJ") {
+            init(); cpu.reset();
+            pcb.TTL = stoi(line.substr(8,4));
+            pcb.TLL = stoi(line.substr(12,4));
+            pcb.TTC = pcb.LLC = 0;
+            loadVA = 0;
+            PTR = allocateFrame() * 10;
+            for(int i=0; i<10; i++) for(int j=0; j<4; j++) memory[PTR+i][j] = '*';
+        } else if(line.substr(0,4) == "$DTA") {
+            cpu.IC = 0; 
             execute();
-        }
-        else if (line.substr(0, 4) == "$END") {
-            mem = 0;
+        } else if(line.substr(0,4) == "$END") {
             continue;
-        }
-        else {
-            for (int i = 0; i < line.length() && mem < 100; i += 4) {
-                for (int j = 0; j < 4; j++) {
-                    if (i + j < line.length())
-                        memory[mem][j] = line[i + j];
-                    else
-                        memory[mem][j] = ' '; 
-                }
-                mem++; 
+        } else {
+            int frame = allocateFrame();
+            int page = loadVA / 10;
+            memory[PTR + page][0] = '0'; memory[PTR + page][1] = '0';
+            memory[PTR + page][2] = (frame/10) + '0'; memory[PTR + page][3] = (frame%10) + '0';
+            for(int i=0; i<line.length() && i<40; i++) {
+                memory[frame*10 + (i/4)][i%4] = line[i];
             }
+            loadVA += 10;
         }
     }
 }
-
-// =============================================================================
-// MAIN DRIVER
-// =============================================================================
 
 int main() {
-    OS myOS;
-    myOS.input.open("input.txt");
-    myOS.output.open("output.txt");
-
-    if (!myOS.input.is_open()) {
-        cerr << "Error: Could not open input.txt" << endl;
-        return 1;
-    }
-
-    myOS.load();
-
-    myOS.input.close();
-    myOS.output.close();
-
+    srand(time(0));
+    input.open("input.txt");
+    output.open("output.txt");
+    load();
+    input.close();
+    output.close();
     return 0;
 }

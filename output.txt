@@ -1,27 +1,14 @@
-ABCD                                    
+Time Limit Exceeded
 
------------------------------------
+Opcode Error
 
-DATA                                    
-TEST                                    
+Operand Error
 
------------------------------------
+Invalid Page Fault
 
-DIFF                                    
+Normal Termination
 
------------------------------------
+Line Limit Exceeded
 
-1234                                    
-5678                                    
-
------------------------------------
-
-NOTE                                    
-
------------------------------------
-
-2222                                    
-1111                                    
-
------------------------------------
+Out of Data
 
